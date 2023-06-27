@@ -29,6 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <ctype.h>
 #include "define.h"
 /* USER CODE END Includes */
 
@@ -57,6 +58,9 @@ extern float omgDst;
 static uint8_t brkErr;
 float vTh, vVr;
 uint8_t onOff;
+static uint8_t rxBuf[256];
+static uint16_t rxBtm = 0;
+extern float vBus, omgFlt, iD, iQ, vDRef, vQRef;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -112,6 +116,7 @@ int main(void)
   MX_DAC1_Init();
   MX_DAC2_Init();
   MX_DAC3_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   setbuf( stdout, NULL );
   setbuf( stdin, NULL );
@@ -134,46 +139,49 @@ int main(void)
   HAL_DAC_SetValue(&hdac1, DAC1_CHANNEL_1, DAC_ALIGN_12B_R, 0xFFF);
   HAL_DAC_SetValue(&hdac2, DAC1_CHANNEL_1, DAC_ALIGN_12B_R, 0xFFF);
   HAL_DAC_SetValue(&hdac3, DAC1_CHANNEL_2, DAC_ALIGN_12B_R, 0xFFF);
+  HAL_UART_Receive_DMA(&huart1, rxBuf, sizeof(rxBuf));
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  static int16_t swCnt;
-  static uint8_t swBuffer;
+  uint32_t tick = HAL_GetTick();
+  uint32_t tickTx = HAL_GetTick();
   while (1)
   {
-    vTh = adc2Buf[0] * _REG2VOLT;
-    vVr = adc2Buf[1] * _REG2VOLT;
-    if( HAL_GPIO_ReadPin(B1_GPIO_Port,B1_Pin) == 1 )
-    {
-      if( ++swCnt == 32767 )
-      {
-        swCnt = 0;
-        swBuffer <<= 1;
-        swBuffer |= 1;
-        onOff ^= ( (swBuffer&0x3) == 0x1 );
-      }
-    }
-    else
-    {
-      if( --swCnt == -32768 )
-      {
-        swCnt = 0;
-        swBuffer <<= 1;
-      }
-    }
-
-
-    if( onOff && !brkErr )
-    {
-      float omgBuf = 233.3f * _RAD(360.0f) / (3.0f-0.1f) * vVr - 233.3f * _RAD(360.0f) / (3.0f-0.1f) * 0.1f;
+    uint16_t rxTop = sizeof(rxBuf) - hlpuart1.hdmarx->Instance->CNDTR;
+    
+    if( ( (rxTop-rxBtm)&(sizeof(rxBuf)-1) ) > 3 ){
+      tick = HAL_GetTick();
+      uint32_t rpmBuf = *(uint32_t *)&rxBuf[rxBtm];
+      rxBtm = rxTop;
+      float omgBuf = (float)rpmBuf / 60.0f * 7.0f * _RAD(360.0f);
       if( omgBuf > 233.3f * _RAD(360.0f) ) omgBuf = 233.3f * _RAD(360.0f);
       else if( omgBuf < 0.0f ) omgBuf = 0.0f;
       omgDst = omgBuf;
     }
-    else
-    {
-      omgDst = 0.0f;
+    else{ 
+      if( HAL_GetTick() - tick > 100 ){
+        tick = HAL_GetTick();
+        rxBtm = rxTop;
+      }
+    }
+
+    if( HAL_GetTick() - tickTx > 1000 ){
+      tickTx = HAL_GetTick();
+      vTh = adc2Buf[0] * _REG2VOLT;
+      float pD = iD*vDRef;
+      float pQ = iQ*vQRef;
+      if( pD < 0 ) pD = -pD;
+      if( pQ < 0 ) pQ = -pQ;
+
+      uint32_t txBuf[4] = {
+        vBus * (1000.0f) + (0.5f),
+        vTh * (1000.0f) + (0.5f),
+        omgFlt * (1000.0f) + (0.5f),
+        (pD+pQ) * (1000.0f) + (0.5f)
+      };
+
+      HAL_UART_Transmit(&huart1, (uint8_t *)txBuf, 16, 100);
     }
 
     /* USER CODE END WHILE */
