@@ -86,8 +86,13 @@ void Error_Handler(void);
 #define T_SWO_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+#define _VCC        (3.3f)
 #define _PI				  ( 3.1415926535f )
 #define _RAD(x)			( _PI * (x) / 180.0f )
+#define _TH_B       (4108.0f)
+#define _TH_R0      (47000.0f)
+#define _TH_T0      (25.0f + 273.15f)
+#define _TH_PDR     (10000.0f)
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

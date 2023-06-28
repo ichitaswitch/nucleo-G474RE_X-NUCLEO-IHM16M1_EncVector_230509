@@ -31,6 +31,8 @@
 #include <stdio.h>
 #include <ctype.h>
 #include "define.h"
+#include "packetSerial.h"
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +58,7 @@ uint16_t adc2Buf[2];
 uint8_t encEdgeDetect;
 extern float omgDst;
 static uint8_t brkErr;
-float vTh, vVr;
+float Tic, vVr;
 uint8_t onOff;
 static uint8_t rxBuf[256];
 static uint16_t rxBtm = 0;
@@ -145,43 +147,45 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   uint32_t tick = HAL_GetTick();
-  uint32_t tickTx = HAL_GetTick();
   while (1)
   {
     uint16_t rxTop = sizeof(rxBuf) - hlpuart1.hdmarx->Instance->CNDTR;
-    
-    if( ( (rxTop-rxBtm)&(sizeof(rxBuf)-1) ) > 3 ){
-      tick = HAL_GetTick();
-      uint32_t rpmBuf = *(uint32_t *)&rxBuf[rxBtm];
-      rxBtm = rxTop;
-      float omgBuf = (float)rpmBuf / 60.0f * 7.0f * _RAD(360.0f);
+
+    if( rxBuf[rxTop] == 0 ){
+      uint16_t rxSize = (rxTop-rxBtm)&(sizeof(rxBuf)-1);
+      uint8_t packet[8];
+      if( rxSize > sizeof(packet) ){
+        rxBtm = rxTop;
+        continue;
+      }
+      for( uint16_t i=0; i<rxSize; i++ ){
+        packet[i] = rxBuf[rxBtm];
+        rxBtm = (rxBtm + 1)&(sizeof(rxBuf)-1);
+      }
+      decodePacket( packet, rxSize );
+      float omgBuf = *(float *)&packet[1] / 60.0f * (_MOTOR_POLE>>1) * _RAD(360.0f);
       if( omgBuf > 233.3f * _RAD(360.0f) ) omgBuf = 233.3f * _RAD(360.0f);
       else if( omgBuf < 0.0f ) omgBuf = 0.0f;
       omgDst = omgBuf;
     }
-    else{ 
-      if( HAL_GetTick() - tick > 100 ){
-        tick = HAL_GetTick();
-        rxBtm = rxTop;
-      }
-    }
-
-    if( HAL_GetTick() - tickTx > 1000 ){
-      tickTx = HAL_GetTick();
-      vTh = adc2Buf[0] * _REG2VOLT;
+    
+    if( HAL_GetTick() - tick > 1000 ){
+      tick = HAL_GetTick();
+      float vth = adc2Buf[0] * _REG2VOLT;
+      float Rth = vth/(_VCC-vth) * _TH_PDR;
+      Tic = _TH_B / ( logf(Rth) - logf(_TH_R0) + (_TH_B/_TH_T0) ) - 273.15f;
       float pD = iD*vDRef;
       float pQ = iQ*vQRef;
       if( pD < 0 ) pD = -pD;
       if( pQ < 0 ) pQ = -pQ;
 
-      uint32_t txBuf[4] = {
-        vBus * (1000.0f) + (0.5f),
-        vTh * (1000.0f) + (0.5f),
-        omgFlt * (1000.0f) + (0.5f),
-        (pD+pQ) * (1000.0f) + (0.5f)
-      };
-
-      HAL_UART_Transmit(&huart1, (uint8_t *)txBuf, 16, 100);
+      uint8_t txBuf[18];
+      *(float *)&txBuf[1] = vBus;
+      *(float *)&txBuf[5] = Tic;
+      *(float *)&txBuf[9] = omgFlt * 60.0f/((_MOTOR_POLE>>1) * _RAD(360.0f));
+      *(float *)&txBuf[13] = pD + pQ;
+      encodePacket( (uint8_t *)txBuf, sizeof(txBuf) );
+      HAL_UART_Transmit(&huart1, (uint8_t *)txBuf, sizeof(txBuf), 100);
     }
 
     /* USER CODE END WHILE */
